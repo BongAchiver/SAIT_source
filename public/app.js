@@ -427,18 +427,30 @@ function upsertMessages(messages) {
   const confirmedMine = messages.some((m) => Number.isInteger(m.id) && m.sender === state.me);
   if (confirmedMine) {
     state.currentMessages = state.currentMessages.filter((m) => Number.isInteger(m.id));
+    for (const node of els.messages.querySelectorAll(".msg.pending")) node.remove();
   }
-  const map = new Map(state.currentMessages.map((m) => [m.id, m]));
+
+  const knownIds = new Set(state.currentMessages.filter((m) => Number.isInteger(m.id)).map((m) => m.id));
+  const onlyNewAppendable = messages.every((m) => Number.isInteger(m.id) && !knownIds.has(m.id));
+
+  if (onlyNewAppendable) {
+    const sortedIncoming = [...messages].sort((a, b) => (a.id || 0) - (b.id || 0));
+    for (const msg of sortedIncoming) {
+      state.currentMessages.push(msg);
+      appendMessage(msg);
+    }
+    return;
+  }
+
+  const map = new Map(state.currentMessages.filter((m) => Number.isInteger(m.id)).map((m) => [m.id, m]));
   for (const msg of messages) {
     if (Number.isInteger(msg.id)) map.set(msg.id, msg);
-    else state.currentMessages.push(msg);
   }
-  const merged = Array.from(map.values()).sort((a, b) => {
+  state.currentMessages = Array.from(map.values()).sort((a, b) => {
     const aTime = new Date(a.createdAt || 0).getTime();
     const bTime = new Date(b.createdAt || 0).getTime();
     return aTime - bTime || (a.id || 0) - (b.id || 0);
   });
-  state.currentMessages = merged;
   renderMessages(state.currentMessages);
 }
 
@@ -451,59 +463,73 @@ function renderMessages(list) {
   els.messages.innerHTML = "";
 
   for (const msg of list) {
-    const box = document.createElement("div");
-    box.className = "msg" + (msg.sender === state.me ? " me" : "");
-
-    const head = document.createElement("div");
-    head.className = "head";
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const modelSuffix = msg.sender === "ChatGPT" && msg.meta?.modelUsed ? ` • ${msg.meta.modelUsed}` : "";
-    meta.textContent = `${msg.sender} • ${formatTime(msg.createdAt)}${modelSuffix}`;
-    head.appendChild(meta);
-
-    if (msg.sender === state.me && Number.isInteger(msg.id)) {
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "delete-btn";
-      del.textContent = "Удалить";
-      del.onclick = async () => {
-        try {
-          await deleteMessage(msg.id);
-        } catch (err) {
-          renderMessages([
-            ...state.currentMessages,
-            {
-              sender: "System",
-              createdAt: new Date().toISOString(),
-              content: `Ошибка удаления: ${err.message}`,
-              format: "plain"
-            }
-          ]);
-        }
-      };
-      head.appendChild(del);
-    }
-
-    const text = document.createElement("div");
-    if (msg.format === "markdown") {
-      text.className = "text markdown";
-      renderMarkdownContent(text, msg.content || "");
-    } else {
-      text.className = "text";
-      text.textContent = msg.content || "";
-    }
-
-    if (!Number.isInteger(msg.id)) box.classList.add("pending");
-    box.classList.add("msg-enter");
-    box.appendChild(head);
-    box.appendChild(text);
-    const attach = attachmentNode(msg);
-    if (attach) box.appendChild(attach);
-    els.messages.appendChild(box);
+    const node = createMessageNode(msg, false);
+    els.messages.appendChild(node);
   }
 
+  els.messages.scrollTop = els.messages.scrollHeight;
+}
+
+function createMessageNode(msg, animate = true) {
+  const box = document.createElement("div");
+  box.className = "msg" + (msg.sender === state.me ? " me" : "");
+  if (!Number.isInteger(msg.id)) box.classList.add("pending");
+  if (animate) box.classList.add("msg-enter");
+  if (Number.isInteger(msg.id)) box.dataset.id = String(msg.id);
+
+  const head = document.createElement("div");
+  head.className = "head";
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const modelSuffix = msg.sender === "ChatGPT" && msg.meta?.modelUsed ? ` • ${msg.meta.modelUsed}` : "";
+  meta.textContent = `${msg.sender} • ${formatTime(msg.createdAt)}${modelSuffix}`;
+  head.appendChild(meta);
+
+  if (msg.sender === state.me && Number.isInteger(msg.id)) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "delete-btn";
+    del.textContent = "Удалить";
+    del.onclick = async () => {
+      try {
+        await deleteMessage(msg.id);
+      } catch (err) {
+        appendMessage(
+          {
+            sender: "System",
+            createdAt: new Date().toISOString(),
+            content: `Ошибка удаления: ${err.message}`,
+            format: "plain"
+          },
+          true
+        );
+      }
+    };
+    head.appendChild(del);
+  }
+
+  const text = document.createElement("div");
+  if (msg.format === "markdown") {
+    text.className = "text markdown";
+    renderMarkdownContent(text, msg.content || "");
+  } else {
+    text.className = "text";
+    text.textContent = msg.content || "";
+  }
+
+  box.appendChild(head);
+  box.appendChild(text);
+  const attach = attachmentNode(msg);
+  if (attach) box.appendChild(attach);
+
+  return box;
+}
+
+function appendMessage(msg, isSystem = false) {
+  const node = createMessageNode(msg, true);
+  if (isSystem) node.classList.remove("pending");
+  els.messages.appendChild(node);
   els.messages.scrollTop = els.messages.scrollHeight;
 }
 
@@ -619,7 +645,9 @@ function connectWs() {
     if (msg.event === "message:delete" && msg.payload) {
       const active = activeChatIdentity();
       if (msg.payload.chatType === active.chatType && msg.payload.chatKey === active.chatKey) {
-        renderMessages(state.currentMessages.filter((item) => item.id !== msg.payload.id));
+        state.currentMessages = state.currentMessages.filter((item) => item.id !== msg.payload.id);
+        const node = els.messages.querySelector(`.msg[data-id="${msg.payload.id}"]`);
+        if (node) node.remove();
       }
     }
   };
@@ -744,7 +772,8 @@ els.composer.addEventListener("submit", async (e) => {
     els.submitBtn.textContent = "Отправка...";
     els.submitBtn.classList.add("sending");
     if (text || file) {
-      renderMessages([...state.currentMessages, pendingMessage]);
+      state.currentMessages.push(pendingMessage);
+      appendMessage(pendingMessage);
     }
 
     if (state.active.type === "ai") {
@@ -791,15 +820,14 @@ els.composer.addEventListener("submit", async (e) => {
       renderMessages(state.currentMessages);
     }
   } catch (err) {
-    renderMessages([
-      ...state.currentMessages,
-      {
-        sender: "System",
-        createdAt: new Date().toISOString(),
-        content: `Ошибка отправки: ${err.message}`,
-        format: "plain"
-      }
-    ]);
+    const systemMsg = {
+      sender: "System",
+      createdAt: new Date().toISOString(),
+      content: `Ошибка отправки: ${err.message}`,
+      format: "plain"
+    };
+    state.currentMessages.push(systemMsg);
+    appendMessage(systemMsg, true);
   } finally {
     els.submitBtn.disabled = false;
     els.submitBtn.textContent = "Отправить";
