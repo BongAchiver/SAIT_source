@@ -271,7 +271,7 @@ function parseAttachment(rawDataUrl, rawName, rawMimeType) {
   };
 }
 
-async function callOpenAI({ text, imageDataUrl, proxyUrl }) {
+async function callOpenAI({ text, imageDataUrl, proxyUrl, enablePythonTool }) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY.includes("PASTE_")) {
     return { text: "OpenAI API key не настроен на сервере.", model: null };
   }
@@ -291,16 +291,27 @@ async function callOpenAI({ text, imageDataUrl, proxyUrl }) {
   input.push({ role: "user", content });
 
   const baseUrl = proxyUrl || "https://api.openai.com";
+  const body = {
+    model: OPENAI_MODEL,
+    input
+  };
+
+  if (enablePythonTool) {
+    body.tools = [
+      {
+        type: "code_interpreter",
+        container: { type: "auto" }
+      }
+    ];
+  }
+
   const response = await fetch(`${baseUrl}/v1/responses`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${OPENAI_API_KEY}`
     },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      input
-    })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -553,6 +564,7 @@ app.post("/api/ai/send", authRequired, aiRateLimit, async (req, res) => {
     const text = (req.body.text || "").toString();
     const imageDataUrl = req.body.imageDataUrl ? req.body.imageDataUrl.toString() : null;
     const proxyUrl = normalizeProxyUrl(req.body.proxyUrl);
+    const enablePythonTool = provider === "openai" && req.body.enablePythonTool === true;
 
     if (!text.trim() && !imageDataUrl) {
       return res.status(400).json({ error: "text or image is required" });
@@ -590,7 +602,7 @@ app.post("/api/ai/send", authRequired, aiRateLimit, async (req, res) => {
     if (provider === "gemini") {
       aiText = await callGemini({ text, imageDataUrl, proxyUrl });
     } else {
-      const openaiResult = await callOpenAI({ text, imageDataUrl, proxyUrl });
+      const openaiResult = await callOpenAI({ text, imageDataUrl, proxyUrl, enablePythonTool });
       aiText = openaiResult.text;
       modelUsed = openaiResult.model;
     }
@@ -601,7 +613,7 @@ app.post("/api/ai/send", authRequired, aiRateLimit, async (req, res) => {
       sender: provider === "gemini" ? "Gemini" : "ChatGPT",
       content: aiText,
       format: "markdown",
-      meta: { provider, modelUsed: modelUsed || OPENAI_MODEL }
+      meta: { provider, modelUsed: modelUsed || OPENAI_MODEL, pythonToolEnabled: enablePythonTool }
     });
 
     broadcast("message:new", { message: aiMessage });

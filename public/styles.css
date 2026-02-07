@@ -303,6 +303,26 @@ button.sending {
   gap: 8px;
 }
 
+.model-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.switch-wrap input {
+  width: 16px;
+  height: 16px;
+}
+
 .messages {
   flex: 1 1 auto;
   min-height: 0;
@@ -327,6 +347,7 @@ button.sending {
   padding: 10px 12px;
   border: 1px solid var(--line);
   background: #f9fcff;
+  overflow: hidden;
 }
 
 .msg.me {
@@ -359,6 +380,8 @@ button.sending {
 .text {
   white-space: pre-wrap;
   line-height: 1.42;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown p {
@@ -374,6 +397,20 @@ button.sending {
   background: #edf4fb;
   padding: 8px;
   border-radius: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .attachment {
@@ -394,6 +431,8 @@ button.sending {
   text-decoration: none;
   font-weight: 700;
   font-size: 13px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .attachment a:hover {

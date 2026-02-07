@@ -57,7 +57,13 @@
           </div>
           <div id="modelInfoBar" class="model-info hidden">
             <span id="modelInfoText"></span>
-            <button id="showProxyBarBtn" type="button" class="ghost-btn hidden">Прокси</button>
+            <div class="model-actions">
+              <label id="openaiPythonWrap" class="switch-wrap hidden">
+                <input id="openaiPythonToggle" type="checkbox" />
+                <span>Python tool</span>
+              </label>
+              <button id="showProxyBarBtn" type="button" class="ghost-btn hidden">Прокси</button>
+            </div>
           </div>
 
           <div id="messages" class="messages"></div>

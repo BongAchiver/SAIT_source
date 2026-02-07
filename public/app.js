@@ -2,6 +2,7 @@ const LS_TOKEN_KEY = "sait_auth_token";
 const LS_THEME_KEY = "sait_theme";
 const LS_PROXY_KEY = "sait_ai_proxy";
 const LS_PROXY_PANEL_HIDDEN_KEY = "sait_proxy_panel_hidden";
+const LS_OPENAI_PYTHON_KEY = "sait_openai_python_tool";
 
 const state = {
   me: null,
@@ -18,7 +19,8 @@ const state = {
   isSending: false,
   historyHasMore: false,
   historyBeforeId: null,
-  isLoadingOlder: false
+  isLoadingOlder: false,
+  openaiPythonEnabled: false
 };
 
 const els = {
@@ -51,6 +53,8 @@ const els = {
   saveProxyBtn: document.getElementById("saveProxyBtn"),
   hideProxyBarBtn: document.getElementById("hideProxyBarBtn"),
   showProxyBarBtn: document.getElementById("showProxyBarBtn"),
+  openaiPythonWrap: document.getElementById("openaiPythonWrap"),
+  openaiPythonToggle: document.getElementById("openaiPythonToggle"),
   modelInfoBar: document.getElementById("modelInfoBar"),
   modelInfoText: document.getElementById("modelInfoText"),
   pasteHint: document.getElementById("pasteHint"),
@@ -123,6 +127,17 @@ function initProxy() {
   });
 }
 
+function initOpenAIPythonTool() {
+  state.openaiPythonEnabled = localStorage.getItem(LS_OPENAI_PYTHON_KEY) === "1";
+  els.openaiPythonToggle.checked = state.openaiPythonEnabled;
+  els.openaiPythonToggle.addEventListener("change", () => {
+    state.openaiPythonEnabled = Boolean(els.openaiPythonToggle.checked);
+    if (state.openaiPythonEnabled) localStorage.setItem(LS_OPENAI_PYTHON_KEY, "1");
+    else localStorage.removeItem(LS_OPENAI_PYTHON_KEY);
+    refreshOpenAIModelInfo();
+  });
+}
+
 function refreshProxyBarVisibility() {
   const hiddenByUser = localStorage.getItem(LS_PROXY_PANEL_HIDDEN_KEY) === "1";
   const isOpenAIChat = state.active.type === "ai" && state.active.target === "openai";
@@ -130,6 +145,7 @@ function refreshProxyBarVisibility() {
 
   els.aiProxyBar.classList.toggle("hidden", !isAnyAiChat || hiddenByUser);
   els.showProxyBarBtn.classList.toggle("hidden", !isOpenAIChat || !hiddenByUser);
+  els.openaiPythonWrap.classList.toggle("hidden", !isOpenAIChat);
 }
 
 async function api(url, options = {}) {
@@ -639,7 +655,8 @@ async function refreshOpenAIModelInfo() {
     const data = await api(`/api/ai/openai-model${query.toString() ? `?${query.toString()}` : ""}`);
 
     if (data.ok) {
-      els.modelInfoText.textContent = `Модель ChatGPT (из API): ${data.apiModel}`;
+      const py = state.openaiPythonEnabled ? "вкл" : "выкл";
+      els.modelInfoText.textContent = `Модель ChatGPT (из API): ${data.apiModel} • Python: ${py}`;
     } else {
       els.modelInfoText.textContent = `Модель ChatGPT (из API): ошибка (${data.error || "unknown"})`;
     }
@@ -911,7 +928,8 @@ els.composer.addEventListener("submit", async (e) => {
           provider: state.active.target,
           text: sendText,
           imageDataUrl,
-          proxyUrl: state.proxyUrl || null
+          proxyUrl: state.proxyUrl || null,
+          enablePythonTool: state.active.target === "openai" ? state.openaiPythonEnabled : false
         })
       });
     } else {
@@ -958,4 +976,5 @@ document.addEventListener("keydown", (e) => {
 
 initTheme();
 initProxy();
+initOpenAIPythonTool();
 restoreSession();
