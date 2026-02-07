@@ -444,10 +444,41 @@ function attachmentNode(msg) {
 }
 
 function normalizeMathBlocks(text) {
-  const raw = (text || "")
+  let raw = (text || "")
     .toString()
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+
+  // Fix frequent broken exponent formatting like:
+  // 2
+  // 9
+  // -> 2^{9}
+  raw = raw.replace(/(^|[=+x×*()\s])(\d{1,5})\s*\n\s*(\d{1,4})(?=([=+x×*()\s]|$))/gm, (_, pfx, base, exp) => {
+    return `${pfx}${base}^{${exp}}`;
+  });
+
+  // Auto-wrap parenthesized LaTeX-like expressions so KaTeX can render them
+  // Example: (a\land b = 1\Rightarrow ...)
+  raw = raw.replace(
+    /\(([^()\n]*\\(?:land|lor|oplus|Rightarrow|times|cdot|ge|le|neq|approx|implies)[^()\n]*)\)/g,
+    (_m, expr) => `$(${expr})$`
+  );
+
+  // Auto-wrap standalone formula lines with LaTeX operators
+  const mathLineRegex =
+    /\\(?:land|lor|oplus|Rightarrow|times|cdot|ge|le|neq|approx|implies)|[∧∨⊕⇒≤≥≈]/;
+  raw = raw
+    .split("\n")
+    .map((line) => {
+      const t = line.trim();
+      if (!t) return line;
+      if (t.includes("$")) return line;
+      if (!mathLineRegex.test(t)) return line;
+      if (/^[()0-9a-zA-Z_\\\s+\-*=<>.,|&^{}]+$/.test(t)) return `$$${t}$$`;
+      return line;
+    })
+    .join("\n");
+
   const lines = raw.split("\n");
   const out = [];
   let inBlock = false;
