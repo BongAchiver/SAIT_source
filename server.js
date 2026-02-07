@@ -12,6 +12,7 @@ const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "PASTE_OPENAI_API_KEY_HERE";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDc9b0sVNROYKpPD42hol2UzK5vyM_Ibkw";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.1";
 const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_JWT_SECRET";
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
@@ -245,7 +246,7 @@ async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
       Authorization: `Bearer ${OPENAI_API_KEY}`
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: OPENAI_MODEL,
       input
     })
   });
