@@ -1,6 +1,7 @@
 const LS_TOKEN_KEY = "sait_auth_token";
 const LS_THEME_KEY = "sait_theme";
 const LS_PROXY_KEY = "sait_ai_proxy";
+const LS_PROXY_PANEL_HIDDEN_KEY = "sait_proxy_panel_hidden";
 
 const state = {
   me: null,
@@ -43,7 +44,10 @@ const els = {
   aiProxyBar: document.getElementById("aiProxyBar"),
   proxyInput: document.getElementById("proxyInput"),
   saveProxyBtn: document.getElementById("saveProxyBtn"),
+  hideProxyBarBtn: document.getElementById("hideProxyBarBtn"),
+  showProxyBarBtn: document.getElementById("showProxyBarBtn"),
   modelInfoBar: document.getElementById("modelInfoBar"),
+  modelInfoText: document.getElementById("modelInfoText"),
   pasteHint: document.getElementById("pasteHint")
 };
 
@@ -99,6 +103,25 @@ function initProxy() {
     }, 900);
     refreshOpenAIModelInfo();
   });
+
+  els.hideProxyBarBtn.addEventListener("click", () => {
+    localStorage.setItem(LS_PROXY_PANEL_HIDDEN_KEY, "1");
+    refreshProxyBarVisibility();
+  });
+
+  els.showProxyBarBtn.addEventListener("click", () => {
+    localStorage.removeItem(LS_PROXY_PANEL_HIDDEN_KEY);
+    refreshProxyBarVisibility();
+  });
+}
+
+function refreshProxyBarVisibility() {
+  const hiddenByUser = localStorage.getItem(LS_PROXY_PANEL_HIDDEN_KEY) === "1";
+  const isOpenAIChat = state.active.type === "ai" && state.active.target === "openai";
+  const isAnyAiChat = state.active.type === "ai";
+
+  els.aiProxyBar.classList.toggle("hidden", !isAnyAiChat || hiddenByUser);
+  els.showProxyBarBtn.classList.toggle("hidden", !isOpenAIChat || !hiddenByUser);
 }
 
 async function api(url, options = {}) {
@@ -354,6 +377,71 @@ function attachmentNode(msg) {
   return wrap;
 }
 
+function normalizeMathBlocks(text) {
+  const raw = (text || "").toString();
+  const lines = raw.split("\n");
+  const out = [];
+  let inBlock = false;
+  let buf = [];
+
+  for (const line of lines) {
+    const t = line.trim();
+    if (!inBlock && (t === "[" || t === "\\[")) {
+      inBlock = true;
+      buf = [];
+      continue;
+    }
+    if (inBlock && (t === "]" || t === "\\]")) {
+      out.push(`$$\n${buf.join("\n")}\n$$`);
+      inBlock = false;
+      buf = [];
+      continue;
+    }
+    if (inBlock) buf.push(line);
+    else out.push(line);
+  }
+
+  if (inBlock) {
+    out.push("[");
+    out.push(...buf);
+  }
+  return out.join("\n");
+}
+
+function renderMarkdownContent(target, text) {
+  const prepared = normalizeMathBlocks(text);
+  const html = marked.parse(prepared || "", { breaks: true, gfm: true });
+  target.innerHTML = DOMPurify.sanitize(html);
+  if (typeof window.renderMathInElement === "function") {
+    window.renderMathInElement(target, {
+      delimiters: [
+        { left: "$$", right: "$$", display: true },
+        { left: "$", right: "$", display: false }
+      ],
+      throwOnError: false
+    });
+  }
+}
+
+function upsertMessages(messages) {
+  const confirmedMine = messages.some((m) => Number.isInteger(m.id) && m.sender === state.me);
+  if (confirmedMine) {
+    state.currentMessages = state.currentMessages.filter((m) => Number.isInteger(m.id));
+  }
+  const map = new Map(state.currentMessages.map((m) => [m.id, m]));
+  for (const msg of messages) {
+    if (Number.isInteger(msg.id)) map.set(msg.id, msg);
+    else state.currentMessages.push(msg);
+  }
+  const merged = Array.from(map.values()).sort((a, b) => {
+    const aTime = new Date(a.createdAt || 0).getTime();
+    const bTime = new Date(b.createdAt || 0).getTime();
+    return aTime - bTime || (a.id || 0) - (b.id || 0);
+  });
+  state.currentMessages = merged;
+  renderMessages(state.currentMessages);
+}
+
 async function deleteMessage(id) {
   await api(`/api/message/${id}`, { method: "DELETE" });
 }
@@ -401,12 +489,14 @@ function renderMessages(list) {
     const text = document.createElement("div");
     if (msg.format === "markdown") {
       text.className = "text markdown";
-      text.innerHTML = DOMPurify.sanitize(marked.parse(msg.content || "", { breaks: true, gfm: true }));
+      renderMarkdownContent(text, msg.content || "");
     } else {
       text.className = "text";
       text.textContent = msg.content || "";
     }
 
+    if (!Number.isInteger(msg.id)) box.classList.add("pending");
+    box.classList.add("msg-enter");
     box.appendChild(head);
     box.appendChild(text);
     const attach = attachmentNode(msg);
@@ -437,7 +527,8 @@ async function refreshOpenAIModelInfo() {
   }
 
   els.modelInfoBar.classList.remove("hidden");
-  els.modelInfoBar.textContent = "Модель ChatGPT (из API): проверка...";
+  els.modelInfoText.textContent = "Модель ChatGPT (из API): проверка...";
+  refreshProxyBarVisibility();
 
   try {
     const query = new URLSearchParams();
@@ -445,12 +536,12 @@ async function refreshOpenAIModelInfo() {
     const data = await api(`/api/ai/openai-model${query.toString() ? `?${query.toString()}` : ""}`);
 
     if (data.ok) {
-      els.modelInfoBar.textContent = `Модель ChatGPT (из API): ${data.apiModel}`;
+      els.modelInfoText.textContent = `Модель ChatGPT (из API): ${data.apiModel}`;
     } else {
-      els.modelInfoBar.textContent = `Модель ChatGPT (из API): ошибка (${data.error || "unknown"})`;
+      els.modelInfoText.textContent = `Модель ChatGPT (из API): ошибка (${data.error || "unknown"})`;
     }
   } catch (err) {
-    els.modelInfoBar.textContent = `Модель ChatGPT (из API): ошибка (${err.message})`;
+    els.modelInfoText.textContent = `Модель ChatGPT (из API): ошибка (${err.message})`;
   }
 }
 
@@ -464,7 +555,7 @@ async function loadHistory() {
   els.youLabel.textContent = `Вы: ${state.me}`;
 
   els.fileWrap.classList.remove("hidden");
-  els.aiProxyBar.classList.toggle("hidden", state.active.type !== "ai");
+  refreshProxyBarVisibility();
   if (state.active.type === "ai") {
     els.fileLabel.textContent = "Изображение";
     els.fileInput.accept = "image/*";
@@ -521,7 +612,7 @@ function connectWs() {
         renderSidebar();
       }
 
-      if (isActive) loadHistory();
+      if (isActive) upsertMessages([node]);
       return;
     }
 
@@ -602,6 +693,32 @@ function resizeComposer() {
   els.messageInput.style.height = `${Math.min(els.messageInput.scrollHeight, 170)}px`;
 }
 
+function buildPendingMessage({ text, file }) {
+  const base = {
+    id: null,
+    sender: state.me,
+    createdAt: new Date().toISOString(),
+    content: text || (file ? "[Вложение]" : ""),
+    format: "plain",
+    meta: null,
+    chatType: state.active.type,
+    chatKey: chatKeyByInput(state.active.type, state.active.target)
+  };
+  if (!file) return base;
+
+  return {
+    ...base,
+    meta: {
+      attachment: {
+        name: file.name || "file",
+        mimeType: file.type || "application/octet-stream",
+        dataUrl: state.filePreviewUrl || "",
+        size: file.size || 0
+      }
+    }
+  };
+}
+
 els.messageInput.addEventListener("input", resizeComposer);
 els.messageInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -620,10 +737,15 @@ els.composer.addEventListener("submit", async (e) => {
 
   const text = els.messageInput.value.trim();
   const file = state.selectedFile || els.fileInput.files?.[0] || null;
+  const pendingMessage = buildPendingMessage({ text, file });
 
   try {
     els.submitBtn.disabled = true;
     els.submitBtn.textContent = "Отправка...";
+    els.submitBtn.classList.add("sending");
+    if (text || file) {
+      renderMessages([...state.currentMessages, pendingMessage]);
+    }
 
     if (state.active.type === "ai") {
       if (!text && !file) return;
@@ -664,7 +786,10 @@ els.composer.addEventListener("submit", async (e) => {
     els.messageInput.value = "";
     resizeComposer();
     clearFileSelection();
-    await loadHistory();
+    if (state.active.type !== "ai") {
+      state.currentMessages = state.currentMessages.filter((m) => Number.isInteger(m.id));
+      renderMessages(state.currentMessages);
+    }
   } catch (err) {
     renderMessages([
       ...state.currentMessages,
@@ -678,6 +803,7 @@ els.composer.addEventListener("submit", async (e) => {
   } finally {
     els.submitBtn.disabled = false;
     els.submitBtn.textContent = "Отправить";
+    els.submitBtn.classList.remove("sending");
   }
 });
 

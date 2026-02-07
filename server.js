@@ -508,6 +508,8 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
 
     const chatKey = chatKeyFor("ai", nickname, provider);
     const history = provider === "openai" ? getAiContext(chatKey, nickname) : [];
+    const imageMimeTypeMatch = imageDataUrl ? imageDataUrl.match(/^data:([^;]+);base64,/) : null;
+    const imageMimeType = imageMimeTypeMatch?.[1] || "image/png";
     const userMessage = insertMessage({
       chatType: "ai",
       chatKey,
@@ -516,7 +518,17 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
       format: "plain",
       meta: {
         provider,
-        hasImage: Boolean(imageDataUrl)
+        hasImage: Boolean(imageDataUrl),
+        ...(imageDataUrl
+          ? {
+              attachment: {
+                name: "image-from-user.png",
+                mimeType: imageMimeType,
+                size: null,
+                dataUrl: imageDataUrl
+              }
+            }
+          : {})
       }
     });
 
