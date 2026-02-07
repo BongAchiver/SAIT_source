@@ -270,6 +270,53 @@ function updateFileSelectionUI() {
   }
 }
 
+function guessExtensionFromMime(mimeType) {
+  const map = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/bmp": "bmp"
+  };
+  return map[mimeType] || "png";
+}
+
+function setSelectedFile(file) {
+  try {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    els.fileInput.files = dt.files;
+    updateFileSelectionUI();
+  } catch {
+    renderMessages([
+      ...state.currentMessages,
+      {
+        sender: "System",
+        createdAt: new Date().toISOString(),
+        content: "Вставка изображения из буфера не поддерживается этим браузером.",
+        format: "plain"
+      }
+    ]);
+  }
+}
+
+function handlePasteImage(e) {
+  const items = Array.from(e.clipboardData?.items || []);
+  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
+  if (!imageItem) return;
+
+  const blob = imageItem.getAsFile();
+  if (!blob) return;
+
+  const ext = guessExtensionFromMime(blob.type);
+  const filename = `screenshot-${Date.now()}.${ext}`;
+  const file = new File([blob], filename, { type: blob.type || "image/png", lastModified: Date.now() });
+
+  setSelectedFile(file);
+  e.preventDefault();
+}
+
 function activeChatIdentity() {
   if (!state.me) return { chatType: "", chatKey: "" };
   return {
@@ -536,6 +583,7 @@ els.messageInput.addEventListener("keydown", (e) => {
     els.composer.requestSubmit();
   }
 });
+els.messageInput.addEventListener("paste", handlePasteImage);
 els.fileInput.addEventListener("change", updateFileSelectionUI);
 els.clearFileBtn.addEventListener("click", clearFileSelection);
 resizeComposer();

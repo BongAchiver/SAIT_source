@@ -112,6 +112,29 @@ function getHistory(chatKey) {
     .map(mapRow);
 }
 
+function getAiContext(chatKey, userNickname, limit = 12) {
+  const rows = db
+    .prepare(
+      `SELECT sender, content
+       FROM messages
+       WHERE chat_key = ?
+       ORDER BY datetime(created_at) DESC, id DESC
+       LIMIT ?`
+    )
+    .all(chatKey, limit)
+    .reverse();
+
+  return rows
+    .map((row) => {
+      const role = row.sender === userNickname ? "user" : "assistant";
+      return {
+        role,
+        content: (row.content || "").toString()
+      };
+    })
+    .filter((item) => item.content.trim().length > 0);
+}
+
 function broadcast(event, payload) {
   const data = JSON.stringify({ event, payload });
   for (const client of wss.clients) {
@@ -193,21 +216,26 @@ function parseAttachment(rawDataUrl, rawName, rawMimeType) {
   };
 }
 
-async function callOpenAI({ text, imageDataUrl, proxyUrl }) {
+async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY.includes("PASTE_")) {
     return "OpenAI API key не настроен на сервере.";
   }
 
+  const input = [
+    {
+      role: "system",
+      content:
+        "Отвечай по-русски, используй markdown-форматирование (заголовки, списки, код-блоки), когда это уместно."
+    },
+    ...(Array.isArray(history) ? history : [])
+  ];
+
   const content = [];
-  if (text && text.trim()) {
-    content.push({ type: "input_text", text });
-  }
-  if (imageDataUrl) {
-    content.push({ type: "input_image", image_url: imageDataUrl });
-  }
-  if (!content.length) {
-    content.push({ type: "input_text", text: "Опиши изображение." });
-  }
+  if (text && text.trim()) content.push({ type: "input_text", text });
+  if (imageDataUrl) content.push({ type: "input_image", image_url: imageDataUrl });
+  if (!content.length) content.push({ type: "input_text", text: "Опиши изображение." });
+
+  input.push({ role: "user", content });
 
   const baseUrl = proxyUrl || "https://api.openai.com";
   const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -218,7 +246,7 @@ async function callOpenAI({ text, imageDataUrl, proxyUrl }) {
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
-      input: [{ role: "user", content }]
+      input
     })
   });
 
@@ -434,6 +462,7 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
     }
 
     const chatKey = chatKeyFor("ai", nickname, provider);
+    const history = provider === "openai" ? getAiContext(chatKey, nickname) : [];
     const userMessage = insertMessage({
       chatType: "ai",
       chatKey,
@@ -452,7 +481,7 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
     if (provider === "gemini") {
       aiText = await callGemini({ text, imageDataUrl, proxyUrl });
     } else {
-      aiText = await callOpenAI({ text, imageDataUrl, proxyUrl });
+      aiText = await callOpenAI({ text, imageDataUrl, proxyUrl, history });
     }
 
     const aiMessage = insertMessage({
