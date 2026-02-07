@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SAIT Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section id="loginView" class="login-view card">
+        <h1>SAIT Chat</h1>
+        <p>Введите ник. Если он уже есть, вы войдете в тот же аккаунт.</p>
+        <form id="loginForm" class="row">
+          <input id="nicknameInput" type="text" maxlength="40" placeholder="Ваш ник" required />
+          <button type="submit">Войти</button>
+        </form>
+        <div id="loginError" class="error"></div>
+      </section>
+
+      <section id="chatView" class="chat-view hidden">
+        <aside class="sidebar card">
+          <div class="sidebar-title">Чаты</div>
+          <div class="chat-list" id="fixedChats"></div>
+          <div class="sidebar-title small">Пользователи</div>
+          <div class="chat-list" id="userChats"></div>
+        </aside>
+
+        <main class="main card">
+          <header class="main-header">
+            <div>
+              <h2 id="chatTitle"></h2>
+              <p id="chatSubtitle"></p>
+            </div>
+            <div class="header-controls">
+              <select id="themeSelect" class="theme-select">
+                <option value="light">Светлая</option>
+                <option value="dark">Темная</option>
+                <option value="glass">Полу-прозрачная</option>
+              </select>
+              <div id="youLabel"></div>
+            </div>
+          </header>
+          <div id="aiProxyBar" class="ai-proxy hidden">
+            <input id="proxyInput" type="url" placeholder="AI proxy URL (необязательно)" />
+            <button id="saveProxyBtn" type="button">Сохранить прокси</button>
+          </div>
+
+          <div id="messages" class="messages"></div>
+
+          <form id="composer" class="composer">
+            <textarea
+              id="messageInput"
+              rows="1"
+              placeholder="Введите сообщение (Enter отправить, Shift+Enter новая строка)"
+            ></textarea>
+            <label id="fileWrap" class="image-wrap hidden">
+              <input id="fileInput" type="file" accept="*/*" />
+              <span id="fileLabel">Файл</span>
+            </label>
+            <button type="submit">Отправить</button>
+          </form>
+          <div id="selectedFileInfo" class="selected-file hidden">
+            <img id="selectedFilePreview" class="selected-file-preview hidden" alt="preview" />
+            <div class="selected-file-meta">
+              <div id="selectedFileName" class="selected-file-name"></div>
+              <div id="selectedFileSize" class="selected-file-size"></div>
+            </div>
+            <button id="clearFileBtn" type="button" class="clear-file-btn">Убрать</button>
+          </div>
+        </main>
+      </section>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
