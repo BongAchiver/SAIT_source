@@ -347,7 +347,6 @@ button.sending {
   padding: 10px 12px;
   border: 1px solid var(--line);
   background: #f9fcff;
-  overflow: hidden;
 }
 
 .msg.me {
@@ -382,6 +381,11 @@ button.sending {
   line-height: 1.42;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.markdown {
+  display: block;
+  white-space: normal;
 }
 
 .markdown p {
