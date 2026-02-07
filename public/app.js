@@ -444,7 +444,10 @@ function attachmentNode(msg) {
 }
 
 function normalizeMathBlocks(text) {
-  const raw = (text || "").toString();
+  const raw = (text || "")
+    .toString()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
   const lines = raw.split("\n");
   const out = [];
   let inBlock = false;
@@ -500,7 +503,12 @@ function renderMarkdownContent(target, text) {
 
   if (typeof window.renderMathInElement === "function") {
     window.renderMathInElement(target, {
-      delimiters: [{ left: "$", right: "$", display: false }],
+      delimiters: [
+        { left: "$$", right: "$$", display: true },
+        { left: "\\[", right: "\\]", display: true },
+        { left: "\\(", right: "\\)", display: false },
+        { left: "$", right: "$", display: false }
+      ],
       throwOnError: false
     });
   }

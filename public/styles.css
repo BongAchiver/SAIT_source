@@ -385,7 +385,9 @@ button.sending {
 
 .markdown {
   display: block;
-  white-space: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown p {
