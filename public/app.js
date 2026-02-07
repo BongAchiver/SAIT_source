@@ -14,7 +14,8 @@ const state = {
   proxyUrl: "",
   filePreviewUrl: null,
   selectedFile: null,
-  selectedFileSource: null
+  selectedFileSource: null,
+  isSending: false
 };
 
 const els = {
@@ -274,6 +275,48 @@ function clearFileSelection() {
   showPasteHint(false);
 }
 
+function createContextMenu() {
+  const menu = document.createElement("div");
+  menu.className = "msg-context-menu hidden";
+  const del = document.createElement("button");
+  del.type = "button";
+  del.textContent = "Удалить";
+  del.onclick = async () => {
+    const id = Number.parseInt(menu.dataset.messageId || "", 10);
+    closeContextMenu();
+    if (!Number.isInteger(id)) return;
+    try {
+      await deleteMessage(id);
+    } catch (err) {
+      const systemMsg = {
+        sender: "System",
+        createdAt: new Date().toISOString(),
+        content: `Ошибка удаления: ${err.message}`,
+        format: "plain"
+      };
+      state.currentMessages.push(systemMsg);
+      appendMessage(systemMsg, true);
+    }
+  };
+  menu.appendChild(del);
+  document.body.appendChild(menu);
+  return menu;
+}
+
+const contextMenu = createContextMenu();
+
+function openContextMenu(x, y, messageId) {
+  contextMenu.dataset.messageId = String(messageId);
+  contextMenu.style.left = `${x}px`;
+  contextMenu.style.top = `${y}px`;
+  contextMenu.classList.remove("hidden");
+}
+
+function closeContextMenu() {
+  contextMenu.classList.add("hidden");
+  contextMenu.dataset.messageId = "";
+}
+
 function renderSelectedFile(file) {
   if (!file) {
     clearFileSelection();
@@ -410,48 +453,68 @@ function normalizeMathBlocks(text) {
 
 function renderMarkdownContent(target, text) {
   const prepared = normalizeMathBlocks(text);
-  const html = marked.parse(prepared || "", { breaks: true, gfm: true });
-  target.innerHTML = DOMPurify.sanitize(html);
+  const mathBlocks = [];
+  const withTokens = (prepared || "").replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
+    const token = `@@MATH_BLOCK_${mathBlocks.length}@@`;
+    mathBlocks.push((expr || "").trim());
+    return token;
+  });
+
+  let html = marked.parse(withTokens, { breaks: true, gfm: true });
+  html = DOMPurify.sanitize(html);
+
+  if (mathBlocks.length && typeof window.katex?.renderToString === "function") {
+    html = html.replace(/@@MATH_BLOCK_(\d+)@@/g, (_, idxRaw) => {
+      const idx = Number.parseInt(idxRaw, 10);
+      const expr = mathBlocks[idx] || "";
+      return window.katex.renderToString(expr, {
+        displayMode: true,
+        throwOnError: false
+      });
+    });
+  }
+  target.innerHTML = html;
+
   if (typeof window.renderMathInElement === "function") {
     window.renderMathInElement(target, {
-      delimiters: [
-        { left: "$$", right: "$$", display: true },
-        { left: "$", right: "$", display: false }
-      ],
+      delimiters: [{ left: "$", right: "$", display: false }],
       throwOnError: false
     });
   }
 }
 
 function upsertMessages(messages) {
-  const confirmedMine = messages.some((m) => Number.isInteger(m.id) && m.sender === state.me);
-  if (confirmedMine) {
-    state.currentMessages = state.currentMessages.filter((m) => Number.isInteger(m.id));
-    for (const node of els.messages.querySelectorAll(".msg.pending")) node.remove();
+  const normalized = messages.filter((m) => Number.isInteger(m.id));
+  if (!normalized.length) return;
+
+  const byId = new Map(state.currentMessages.filter((m) => Number.isInteger(m.id)).map((m) => [m.id, m]));
+  let hasUpdatedExisting = false;
+  const toAppend = [];
+
+  for (const msg of normalized.sort((a, b) => a.id - b.id)) {
+    if (byId.has(msg.id)) {
+      byId.set(msg.id, msg);
+      hasUpdatedExisting = true;
+    } else {
+      byId.set(msg.id, msg);
+      toAppend.push(msg);
+    }
   }
 
-  const knownIds = new Set(state.currentMessages.filter((m) => Number.isInteger(m.id)).map((m) => m.id));
-  const onlyNewAppendable = messages.every((m) => Number.isInteger(m.id) && !knownIds.has(m.id));
-
-  if (onlyNewAppendable) {
-    const sortedIncoming = [...messages].sort((a, b) => (a.id || 0) - (b.id || 0));
-    for (const msg of sortedIncoming) {
-      state.currentMessages.push(msg);
-      appendMessage(msg);
-    }
+  if (hasUpdatedExisting) {
+    state.currentMessages = Array.from(byId.values()).sort((a, b) => {
+      const aTime = new Date(a.createdAt || 0).getTime();
+      const bTime = new Date(b.createdAt || 0).getTime();
+      return aTime - bTime || (a.id || 0) - (b.id || 0);
+    });
+    renderMessages(state.currentMessages);
     return;
   }
 
-  const map = new Map(state.currentMessages.filter((m) => Number.isInteger(m.id)).map((m) => [m.id, m]));
-  for (const msg of messages) {
-    if (Number.isInteger(msg.id)) map.set(msg.id, msg);
+  for (const msg of toAppend) {
+    state.currentMessages.push(msg);
+    appendMessage(msg);
   }
-  state.currentMessages = Array.from(map.values()).sort((a, b) => {
-    const aTime = new Date(a.createdAt || 0).getTime();
-    const bTime = new Date(b.createdAt || 0).getTime();
-    return aTime - bTime || (a.id || 0) - (b.id || 0);
-  });
-  renderMessages(state.currentMessages);
 }
 
 async function deleteMessage(id) {
@@ -487,26 +550,11 @@ function createMessageNode(msg, animate = true) {
   head.appendChild(meta);
 
   if (msg.sender === state.me && Number.isInteger(msg.id)) {
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "delete-btn";
-    del.textContent = "Удалить";
-    del.onclick = async () => {
-      try {
-        await deleteMessage(msg.id);
-      } catch (err) {
-        appendMessage(
-          {
-            sender: "System",
-            createdAt: new Date().toISOString(),
-            content: `Ошибка удаления: ${err.message}`,
-            format: "plain"
-          },
-          true
-        );
-      }
-    };
-    head.appendChild(del);
+    box.classList.add("own-message");
+    box.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, msg.id);
+    });
   }
 
   const text = document.createElement("div");
@@ -721,32 +769,6 @@ function resizeComposer() {
   els.messageInput.style.height = `${Math.min(els.messageInput.scrollHeight, 170)}px`;
 }
 
-function buildPendingMessage({ text, file }) {
-  const base = {
-    id: null,
-    sender: state.me,
-    createdAt: new Date().toISOString(),
-    content: text || (file ? "[Вложение]" : ""),
-    format: "plain",
-    meta: null,
-    chatType: state.active.type,
-    chatKey: chatKeyByInput(state.active.type, state.active.target)
-  };
-  if (!file) return base;
-
-  return {
-    ...base,
-    meta: {
-      attachment: {
-        name: file.name || "file",
-        mimeType: file.type || "application/octet-stream",
-        dataUrl: state.filePreviewUrl || "",
-        size: file.size || 0
-      }
-    }
-  };
-}
-
 els.messageInput.addEventListener("input", resizeComposer);
 els.messageInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -761,64 +783,58 @@ resizeComposer();
 
 els.composer.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!state.me) return;
+  if (!state.me || state.isSending) return;
+  closeContextMenu();
 
   const text = els.messageInput.value.trim();
   const file = state.selectedFile || els.fileInput.files?.[0] || null;
-  const pendingMessage = buildPendingMessage({ text, file });
+  if (!text && !file) return;
+
+  els.messageInput.value = "";
+  resizeComposer();
+  const sendFile = file;
+  const sendText = text;
+  state.isSending = true;
 
   try {
     els.submitBtn.disabled = true;
     els.submitBtn.textContent = "Отправка...";
     els.submitBtn.classList.add("sending");
-    if (text || file) {
-      state.currentMessages.push(pendingMessage);
-      appendMessage(pendingMessage);
-    }
 
     if (state.active.type === "ai") {
-      if (!text && !file) return;
-
       let imageDataUrl = null;
-      if (file) {
-        if (!file.type.startsWith("image/")) throw new Error("Для AI-чата можно отправлять только изображения");
-        imageDataUrl = await fileToDataUrl(file);
+      if (sendFile) {
+        if (!sendFile.type.startsWith("image/")) throw new Error("Для AI-чата можно отправлять только изображения");
+        imageDataUrl = await fileToDataUrl(sendFile);
       }
 
       await api("/api/ai/send", {
         method: "POST",
         body: JSON.stringify({
           provider: state.active.target,
-          text,
+          text: sendText,
           imageDataUrl,
           proxyUrl: state.proxyUrl || null
         })
       });
     } else {
-      if (!text && !file) return;
       let attachmentDataUrl = null;
-      if (file) attachmentDataUrl = await fileToDataUrl(file);
+      if (sendFile) attachmentDataUrl = await fileToDataUrl(sendFile);
 
       await api("/api/message", {
         method: "POST",
         body: JSON.stringify({
           type: state.active.type,
           target: state.active.target,
-          content: text,
+          content: sendText,
           attachmentDataUrl,
-          attachmentName: file?.name || null,
-          attachmentMimeType: file?.type || null
+          attachmentName: sendFile?.name || null,
+          attachmentMimeType: sendFile?.type || null
         })
       });
     }
 
-    els.messageInput.value = "";
-    resizeComposer();
     clearFileSelection();
-    if (state.active.type !== "ai") {
-      state.currentMessages = state.currentMessages.filter((m) => Number.isInteger(m.id));
-      renderMessages(state.currentMessages);
-    }
   } catch (err) {
     const systemMsg = {
       sender: "System",
@@ -829,10 +845,18 @@ els.composer.addEventListener("submit", async (e) => {
     state.currentMessages.push(systemMsg);
     appendMessage(systemMsg, true);
   } finally {
+    state.isSending = false;
     els.submitBtn.disabled = false;
     els.submitBtn.textContent = "Отправить";
     els.submitBtn.classList.remove("sending");
   }
+});
+
+document.addEventListener("click", (e) => {
+  if (!contextMenu.contains(e.target)) closeContextMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeContextMenu();
 });
 
 initTheme();

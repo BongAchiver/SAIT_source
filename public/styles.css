@@ -329,16 +329,6 @@ button.sending {
   margin-bottom: 6px;
 }
 
-.delete-btn {
-  border: 1px solid #d8e5f2;
-  background: #ffffff;
-  color: #547088;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 4px 8px;
-  border-radius: 8px;
-}
-
 .text {
   white-space: pre-wrap;
   line-height: 1.42;
@@ -483,6 +473,34 @@ button.sending {
   font-weight: 700;
   padding: 6px 10px;
   border-radius: 8px;
+}
+
+.msg.own-message {
+  cursor: context-menu;
+}
+
+.msg-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(20, 55, 84, 0.18);
+  padding: 6px;
+}
+
+.msg-context-menu button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #b4232a;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.msg-context-menu button:hover {
+  background: #fff1f1;
 }
 
 @keyframes msgIn {
