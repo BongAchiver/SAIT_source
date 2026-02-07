@@ -10,18 +10,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 3000;
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, "chat.db");
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "PASTE_OPENAI_API_KEY_HERE";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDc9b0sVNROYKpPD42hol2UzK5vyM_Ibkw";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.1";
 const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_JWT_SECRET";
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const LOGIN_PASSWORD = process.env.LOGIN_PASSWORD || "QWE123qwe";
+const MAX_ATTACHMENT_BYTES = Number.parseInt(process.env.MAX_ATTACHMENT_MB || "25", 10) * 1024 * 1024;
+const HISTORY_LIMIT_DEFAULT = Number.parseInt(process.env.HISTORY_LIMIT || "80", 10);
+const HISTORY_LIMIT_MAX = Number.parseInt(process.env.HISTORY_LIMIT_MAX || "200", 10);
+const WS_FLUSH_MS = Number.parseInt(process.env.WS_FLUSH_MS || "25", 10);
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const db = new Database(path.join(__dirname, "chat.db"));
+const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
+db.pragma("synchronous = NORMAL");
+db.pragma("temp_store = MEMORY");
+db.pragma("cache_size = -16000");
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,8 +52,51 @@ db.exec(`
   ON messages(chat_key, created_at, id);
 `);
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json({ limit: process.env.JSON_LIMIT || "35mb" }));
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  next();
+});
+app.use(
+  express.static(path.join(__dirname, "public"), {
+    maxAge: "1h",
+    etag: true
+  })
+);
+
+function createRateLimiter({ windowMs, maxRequests }) {
+  const buckets = new Map();
+  let cleanupTick = 0;
+
+  function cleanup(now) {
+    for (const [key, value] of buckets) {
+      if (now > value.resetAt) buckets.delete(key);
+    }
+  }
+
+  return (req, res, next) => {
+    const now = Date.now();
+    cleanupTick += 1;
+    if (cleanupTick % 200 === 0) cleanup(now);
+
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
+    const item = buckets.get(ip);
+    if (!item || now > item.resetAt) {
+      buckets.set(ip, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (item.count >= maxRequests) {
+      return res.status(429).json({ error: "Too many requests, try later" });
+    }
+    item.count += 1;
+    return next();
+  };
+}
+
+const loginRateLimit = createRateLimiter({ windowMs: 60_000, maxRequests: 40 });
+const aiRateLimit = createRateLimiter({ windowMs: 60_000, maxRequests: 60 });
 
 function normalizeNickname(raw) {
   return (raw || "").trim();
@@ -102,54 +153,46 @@ function insertMessage({ chatType, chatKey, sender, content, format = "plain", m
   return mapRow(row);
 }
 
-function getHistory(chatKey) {
-  return db
-    .prepare(
-      `SELECT * FROM messages
-       WHERE chat_key = ?
-       ORDER BY datetime(created_at) ASC, id ASC`
-    )
-    .all(chatKey)
-    .map(mapRow);
+function normalizeLimit(rawLimit) {
+  const n = Number.parseInt(rawLimit, 10);
+  if (!Number.isFinite(n) || n <= 0) return HISTORY_LIMIT_DEFAULT;
+  return Math.min(n, HISTORY_LIMIT_MAX);
 }
 
-function getAiContext(chatKey, userNickname, limit = 30) {
-  const rows = db
-    .prepare(
-      `SELECT sender, content
-       FROM messages
-       WHERE chat_key = ?
-       ORDER BY datetime(created_at) DESC, id DESC
+function getHistory(chatKey, beforeId = null, limit = HISTORY_LIMIT_DEFAULT) {
+  const safeLimit = normalizeLimit(limit);
+  const sql = beforeId
+    ? `SELECT * FROM messages
+       WHERE chat_key = ? AND id < ?
+       ORDER BY id DESC
        LIMIT ?`
-    )
-    .all(chatKey, limit)
-    .reverse();
+    : `SELECT * FROM messages
+       WHERE chat_key = ?
+       ORDER BY id DESC
+       LIMIT ?`;
 
-  return rows
-    .map((row) => {
-      const role = row.sender === userNickname ? "user" : "assistant";
-      return {
-        role,
-        content: (row.content || "").toString()
-      };
-    })
-    .filter((item) => item.content.trim().length > 0);
+  const rows = beforeId ? db.prepare(sql).all(chatKey, beforeId, safeLimit + 1) : db.prepare(sql).all(chatKey, safeLimit + 1);
+  const hasMore = rows.length > safeLimit;
+  const sliced = (hasMore ? rows.slice(0, safeLimit) : rows).reverse().map(mapRow);
+  return { messages: sliced, hasMore };
 }
 
-function buildHistoryTranscript(history) {
-  if (!Array.isArray(history) || !history.length) return "";
-  const lines = [];
-  for (const item of history) {
-    const who = item.role === "assistant" ? "Assistant" : "User";
-    lines.push(`${who}: ${item.content}`);
+const pendingBroadcastEvents = [];
+let flushTimer = null;
+
+function flushBroadcastQueue() {
+  flushTimer = null;
+  if (!pendingBroadcastEvents.length) return;
+  const packet = JSON.stringify({ events: pendingBroadcastEvents.splice(0) });
+  for (const client of wss.clients) {
+    if (client.readyState === 1) client.send(packet);
   }
-  return lines.join("\n");
 }
 
 function broadcast(event, payload) {
-  const data = JSON.stringify({ event, payload });
-  for (const client of wss.clients) {
-    if (client.readyState === 1) client.send(data);
+  pendingBroadcastEvents.push({ event, payload });
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushBroadcastQueue, WS_FLUSH_MS);
   }
 }
 
@@ -213,7 +256,8 @@ function parseAttachment(rawDataUrl, rawName, rawMimeType) {
   const base64Data = match[2];
   const bytes = Buffer.byteLength(base64Data, "base64");
   if (!bytes || bytes > MAX_ATTACHMENT_BYTES) {
-    throw new Error("Attachment is too large (max 8MB)");
+    const maxMb = Math.floor(MAX_ATTACHMENT_BYTES / (1024 * 1024));
+    throw new Error(`Attachment is too large (max ${maxMb}MB)`);
   }
 
   const attachmentName = (rawName || "file").toString().trim().slice(0, 120) || "file";
@@ -227,18 +271,15 @@ function parseAttachment(rawDataUrl, rawName, rawMimeType) {
   };
 }
 
-async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
+async function callOpenAI({ text, imageDataUrl, proxyUrl }) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY.includes("PASTE_")) {
     return { text: "OpenAI API key не настроен на сервере.", model: null };
   }
 
-  const historyTranscript = buildHistoryTranscript(history);
-
   const input = [
     {
       role: "system",
-      content: `Отвечай по-русски, используй markdown-форматирование (заголовки, списки, код-блоки), когда это уместно.
-${historyTranscript ? `Ниже история текущего диалога, учитывай ее в ответе:\n${historyTranscript}` : ""}`
+      content: "Отвечай по-русски, используй markdown-форматирование (заголовки, списки, код-блоки), когда это уместно."
     }
   ];
 
@@ -365,10 +406,17 @@ async function callGemini({ text, imageDataUrl, proxyUrl }) {
   return result || "Пустой ответ Gemini.";
 }
 
-app.post("/api/login", (req, res) => {
+app.post("/api/login", loginRateLimit, (req, res) => {
   const nickname = normalizeNickname(req.body?.nickname);
+  const password = (req.body?.password || "").toString();
   if (!nickname) {
     return res.status(400).json({ error: "Nickname is required" });
+  }
+  if (!password) {
+    return res.status(400).json({ error: "Password is required" });
+  }
+  if (password !== LOGIN_PASSWORD) {
+    return res.status(401).json({ error: "Invalid password" });
   }
 
   db.prepare("INSERT OR IGNORE INTO users (nickname) VALUES (?)").run(nickname);
@@ -394,6 +442,9 @@ app.get("/api/history", authRequired, (req, res) => {
     const type = (req.query.type || "").toString();
     const nickname = req.authUser;
     const target = (req.query.target || "").toString();
+    const beforeIdRaw = (req.query.beforeId || "").toString();
+    const beforeId = beforeIdRaw ? Number.parseInt(beforeIdRaw, 10) : null;
+    const limit = normalizeLimit(req.query.limit);
 
     let chatKey;
     if (type === "global") chatKey = chatKeyFor("global");
@@ -409,7 +460,8 @@ app.get("/api/history", authRequired, (req, res) => {
       return res.status(400).json({ error: "Invalid type" });
     }
 
-    return res.json({ messages: getHistory(chatKey) });
+    const history = getHistory(chatKey, Number.isInteger(beforeId) ? beforeId : null, limit);
+    return res.json(history);
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
@@ -494,7 +546,7 @@ app.delete("/api/message/:id", authRequired, (req, res) => {
   }
 });
 
-app.post("/api/ai/send", authRequired, async (req, res) => {
+app.post("/api/ai/send", authRequired, aiRateLimit, async (req, res) => {
   try {
     const nickname = req.authUser;
     const provider = req.body.provider === "gemini" ? "gemini" : "openai";
@@ -507,7 +559,6 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
     }
 
     const chatKey = chatKeyFor("ai", nickname, provider);
-    const history = provider === "openai" ? getAiContext(chatKey, nickname) : [];
     const imageMimeTypeMatch = imageDataUrl ? imageDataUrl.match(/^data:([^;]+);base64,/) : null;
     const imageMimeType = imageMimeTypeMatch?.[1] || "image/png";
     const userMessage = insertMessage({
@@ -539,7 +590,7 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
     if (provider === "gemini") {
       aiText = await callGemini({ text, imageDataUrl, proxyUrl });
     } else {
-      const openaiResult = await callOpenAI({ text, imageDataUrl, proxyUrl, history });
+      const openaiResult = await callOpenAI({ text, imageDataUrl, proxyUrl });
       aiText = openaiResult.text;
       modelUsed = openaiResult.model;
     }
@@ -568,6 +619,10 @@ app.get("/api/ai/openai-model", authRequired, async (req, res) => {
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
+});
+
+app.get("/health", (_req, res) => {
+  return res.json({ ok: true });
 });
 
 wss.on("connection", (ws) => {

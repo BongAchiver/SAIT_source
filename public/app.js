@@ -15,7 +15,10 @@ const state = {
   filePreviewUrl: null,
   selectedFile: null,
   selectedFileSource: null,
-  isSending: false
+  isSending: false,
+  historyHasMore: false,
+  historyBeforeId: null,
+  isLoadingOlder: false
 };
 
 const els = {
@@ -23,6 +26,7 @@ const els = {
   chatView: document.getElementById("chatView"),
   loginForm: document.getElementById("loginForm"),
   nicknameInput: document.getElementById("nicknameInput"),
+  passwordInput: document.getElementById("passwordInput"),
   loginError: document.getElementById("loginError"),
   fixedChats: document.getElementById("fixedChats"),
   userChats: document.getElementById("userChats"),
@@ -49,7 +53,8 @@ const els = {
   showProxyBarBtn: document.getElementById("showProxyBarBtn"),
   modelInfoBar: document.getElementById("modelInfoBar"),
   modelInfoText: document.getElementById("modelInfoText"),
-  pasteHint: document.getElementById("pasteHint")
+  pasteHint: document.getElementById("pasteHint"),
+  logoutBtn: document.getElementById("logoutBtn")
 };
 
 const fixed = [
@@ -77,6 +82,8 @@ function resetAuthState() {
   }
   els.chatView.classList.add("hidden");
   els.loginView.classList.remove("hidden");
+  els.passwordInput.value = "";
+  closeContextMenu();
 }
 
 function applyTheme(theme) {
@@ -521,16 +528,38 @@ async function deleteMessage(id) {
   await api(`/api/message/${id}`, { method: "DELETE" });
 }
 
-function renderMessages(list) {
+function removeLoadOlderButton() {
+  const existing = els.messages.querySelector(".load-older");
+  if (existing) existing.remove();
+}
+
+function renderLoadOlderButton() {
+  removeLoadOlderButton();
+  if (!state.historyHasMore) return;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "load-older";
+  btn.textContent = state.isLoadingOlder ? "Загрузка..." : "Загрузить еще";
+  btn.disabled = state.isLoadingOlder;
+  btn.addEventListener("click", () => {
+    loadOlderHistory();
+  });
+  els.messages.prepend(btn);
+}
+
+function renderMessages(list, options = {}) {
+  const { stickBottom = true } = options;
   state.currentMessages = list;
   els.messages.innerHTML = "";
+  renderLoadOlderButton();
 
   for (const msg of list) {
     const node = createMessageNode(msg, false);
     els.messages.appendChild(node);
   }
 
-  els.messages.scrollTop = els.messages.scrollHeight;
+  if (stickBottom) els.messages.scrollTop = els.messages.scrollHeight;
 }
 
 function createMessageNode(msg, animate = true) {
@@ -620,7 +649,7 @@ async function refreshOpenAIModelInfo() {
 }
 
 async function loadHistory() {
-  const params = new URLSearchParams({ type: state.active.type });
+  const params = new URLSearchParams({ type: state.active.type, limit: "80" });
   if (state.active.target) params.set("target", state.active.target);
 
   const meta = getActiveMeta();
@@ -636,7 +665,8 @@ async function loadHistory() {
     els.proxyInput.value = state.proxyUrl;
   } else {
     els.fileLabel.textContent = "Файл/Картинка";
-    els.fileInput.accept = "image/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.zip,.rar,.7z,.csv,.json";
+    els.fileInput.accept =
+      "image/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.csv,.json,.exe,.msi,.bat,.cmd,.zip,.rar,.7z,.tar,.gz,.tgz,.bz2,.xz";
   }
 
   clearFileSelection();
@@ -645,8 +675,13 @@ async function loadHistory() {
 
   try {
     const data = await api(`/api/history?${params.toString()}`);
-    renderMessages(data.messages);
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    state.historyHasMore = Boolean(data.hasMore);
+    state.historyBeforeId = messages.length ? messages[0].id : null;
+    renderMessages(messages, { stickBottom: true });
   } catch (err) {
+    state.historyHasMore = false;
+    state.historyBeforeId = null;
     renderMessages([
       {
         sender: "System",
@@ -660,6 +695,52 @@ async function loadHistory() {
   refreshOpenAIModelInfo();
 }
 
+async function loadOlderHistory() {
+  if (state.isLoadingOlder || !state.historyHasMore || !state.historyBeforeId) return;
+  state.isLoadingOlder = true;
+  renderLoadOlderButton();
+
+  const prevHeight = els.messages.scrollHeight;
+  const prevTop = els.messages.scrollTop;
+
+  try {
+    const params = new URLSearchParams({
+      type: state.active.type,
+      limit: "80",
+      beforeId: String(state.historyBeforeId)
+    });
+    if (state.active.target) params.set("target", state.active.target);
+
+    const data = await api(`/api/history?${params.toString()}`);
+    const older = Array.isArray(data.messages) ? data.messages : [];
+    if (!older.length) {
+      state.historyHasMore = false;
+      return;
+    }
+
+    const map = new Map(
+      state.currentMessages
+        .filter((item) => Number.isInteger(item.id))
+        .map((item) => [item.id, item])
+    );
+    for (const item of older) {
+      if (Number.isInteger(item.id)) map.set(item.id, item);
+    }
+    const merged = Array.from(map.values()).sort((a, b) => (a.id || 0) - (b.id || 0));
+    state.historyHasMore = Boolean(data.hasMore);
+    state.historyBeforeId = merged.length ? merged[0].id : null;
+    renderMessages(merged, { stickBottom: false });
+
+    const delta = els.messages.scrollHeight - prevHeight;
+    els.messages.scrollTop = prevTop + Math.max(delta, 0);
+  } catch {
+    // do nothing
+  } finally {
+    state.isLoadingOlder = false;
+    renderLoadOlderButton();
+  }
+}
+
 function connectWs() {
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
 
@@ -667,9 +748,7 @@ function connectWs() {
   const ws = new WebSocket(`${proto}://${location.host}`);
   state.ws = ws;
 
-  ws.onmessage = (evt) => {
-    const msg = JSON.parse(evt.data);
-
+  function handleWsEvent(msg) {
     if (msg.event === "users:update") {
       state.users = msg.payload.users || [];
       renderSidebar();
@@ -698,6 +777,15 @@ function connectWs() {
         if (node) node.remove();
       }
     }
+  }
+
+  ws.onmessage = (evt) => {
+    const packet = JSON.parse(evt.data);
+    if (Array.isArray(packet.events)) {
+      for (const item of packet.events) handleWsEvent(item);
+      return;
+    }
+    handleWsEvent(packet);
   };
 
   ws.onclose = () => {
@@ -716,10 +804,10 @@ function enterChat(user, users) {
   connectWs();
 }
 
-async function login(nickname) {
+async function login(nickname, password) {
   const data = await api("/api/login", {
     method: "POST",
-    body: JSON.stringify({ nickname })
+    body: JSON.stringify({ nickname, password })
   });
   setToken(data.token);
   enterChat(data.user, data.users);
@@ -744,15 +832,24 @@ els.loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   els.loginError.textContent = "";
   const nick = els.nicknameInput.value.trim();
+  const password = els.passwordInput.value;
   if (!nick) {
     els.loginError.textContent = "Введите ник";
     return;
   }
+  if (!password) {
+    els.loginError.textContent = "Введите пароль";
+    return;
+  }
   try {
-    await login(nick);
+    await login(nick, password);
   } catch (err) {
     els.loginError.textContent = err.message;
   }
+});
+
+els.logoutBtn.addEventListener("click", () => {
+  resetAuthState();
 });
 
 async function fileToDataUrl(file) {

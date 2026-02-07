@@ -97,6 +97,12 @@ body {
 .row {
   display: flex;
   gap: 10px;
+  align-items: stretch;
+}
+
+.row input {
+  flex: 1 1 0;
+  width: auto;
 }
 
 input,
@@ -157,6 +163,7 @@ button.sending {
   gap: 14px;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -233,9 +240,10 @@ button.sending {
 }
 
 .main {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .main-header {
@@ -296,11 +304,21 @@ button.sending {
 }
 
 .messages {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.load-older {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 999px;
 }
 
 .msg {

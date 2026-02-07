@@ -1,0 +1,25 @@
+services:
+  sait-chat:
+    build: .
+    container_name: sait-chat
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      DB_PATH: /app/data/chat.db
+      LOGIN_PASSWORD: ${LOGIN_PASSWORD:-QWE123qwe}
+      JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-PASTE_OPENAI_API_KEY_HERE}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-PASTE_GEMINI_API_KEY_HERE}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.1}
+      MAX_ATTACHMENT_MB: ${MAX_ATTACHMENT_MB:-25}
+      JSON_LIMIT: ${JSON_LIMIT:-35mb}
+      HISTORY_LIMIT: ${HISTORY_LIMIT:-80}
+      HISTORY_LIMIT_MAX: ${HISTORY_LIMIT_MAX:-200}
+      WS_FLUSH_MS: ${WS_FLUSH_MS:-25}
+    volumes:
+      - sait_data:/app/data
+
+volumes:
+  sait_data:

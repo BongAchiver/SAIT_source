@@ -17,9 +17,10 @@
     <div class="app-shell">
       <section id="loginView" class="login-view card">
         <h1>SAIT Chat</h1>
-        <p>Введите ник. Если он уже есть, вы войдете в тот же аккаунт.</p>
+        <p>Введите ник и пароль. Если ник уже есть, вы войдете в тот же аккаунт.</p>
         <form id="loginForm" class="row">
           <input id="nicknameInput" type="text" maxlength="40" placeholder="Ваш ник" required />
+          <input id="passwordInput" type="password" placeholder="Пароль" required />
           <button type="submit">Войти</button>
         </form>
         <div id="loginError" class="error"></div>
@@ -45,6 +46,7 @@
                 <option value="dark">Темная</option>
                 <option value="glass">Полу-прозрачная</option>
               </select>
+              <button id="logoutBtn" type="button" class="ghost-btn">Выход</button>
               <div id="youLabel"></div>
             </div>
           </header>
