@@ -113,7 +113,7 @@ function getHistory(chatKey) {
     .map(mapRow);
 }
 
-function getAiContext(chatKey, userNickname, limit = 12) {
+function getAiContext(chatKey, userNickname, limit = 30) {
   const rows = db
     .prepare(
       `SELECT sender, content
@@ -134,6 +134,16 @@ function getAiContext(chatKey, userNickname, limit = 12) {
       };
     })
     .filter((item) => item.content.trim().length > 0);
+}
+
+function buildHistoryTranscript(history) {
+  if (!Array.isArray(history) || !history.length) return "";
+  const lines = [];
+  for (const item of history) {
+    const who = item.role === "assistant" ? "Assistant" : "User";
+    lines.push(`${who}: ${item.content}`);
+  }
+  return lines.join("\n");
 }
 
 function broadcast(event, payload) {
@@ -222,13 +232,14 @@ async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
     return { text: "OpenAI API key не настроен на сервере.", model: null };
   }
 
+  const historyTranscript = buildHistoryTranscript(history);
+
   const input = [
     {
       role: "system",
-      content:
-        "Отвечай по-русски, используй markdown-форматирование (заголовки, списки, код-блоки), когда это уместно."
-    },
-    ...(Array.isArray(history) ? history : [])
+      content: `Отвечай по-русски, используй markdown-форматирование (заголовки, списки, код-блоки), когда это уместно.
+${historyTranscript ? `Ниже история текущего диалога, учитывай ее в ответе:\n${historyTranscript}` : ""}`
+    }
   ];
 
   const content = [];
