@@ -262,6 +262,13 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
+.model-info {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .messages {
   overflow: auto;
   padding: 14px;
@@ -388,6 +395,22 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.paste-hint {
+  margin: 0 12px 12px;
+  padding: 8px 10px;
+  border: 1px solid #77c7a2;
+  background: #e9fff3;
+  color: #0f7a4f;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  display: none;
+}
+
+.paste-hint.show {
+  display: block;
 }
 
 .selected-file-preview {

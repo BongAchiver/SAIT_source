@@ -9,9 +9,11 @@ const state = {
   active: { type: "global", target: null },
   ws: null,
   currentMessages: [],
-  filePreviewUrl: null,
   unreadByChatKey: {},
-  proxyUrl: ""
+  proxyUrl: "",
+  filePreviewUrl: null,
+  selectedFile: null,
+  selectedFileSource: null
 };
 
 const els = {
@@ -40,7 +42,9 @@ const els = {
   themeSelect: document.getElementById("themeSelect"),
   aiProxyBar: document.getElementById("aiProxyBar"),
   proxyInput: document.getElementById("proxyInput"),
-  saveProxyBtn: document.getElementById("saveProxyBtn")
+  saveProxyBtn: document.getElementById("saveProxyBtn"),
+  modelInfoBar: document.getElementById("modelInfoBar"),
+  pasteHint: document.getElementById("pasteHint")
 };
 
 const fixed = [
@@ -78,8 +82,7 @@ function applyTheme(theme) {
 }
 
 function initTheme() {
-  const saved = localStorage.getItem(LS_THEME_KEY) || "light";
-  applyTheme(saved);
+  applyTheme(localStorage.getItem(LS_THEME_KEY) || "light");
   els.themeSelect.addEventListener("change", () => applyTheme(els.themeSelect.value));
 }
 
@@ -94,6 +97,7 @@ function initProxy() {
     setTimeout(() => {
       els.saveProxyBtn.textContent = "Сохранить прокси";
     }, 900);
+    refreshOpenAIModelInfo();
   });
 }
 
@@ -108,9 +112,7 @@ async function api(url, options = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    if (res.status === 401 && url !== "/api/login") {
-      resetAuthState();
-    }
+    if (res.status === 401 && url !== "/api/login") resetAuthState();
     throw new Error(data.error || "Request failed");
   }
   return data;
@@ -137,14 +139,12 @@ function chatKeyByInput(type, target = null) {
 }
 
 function unreadCount(type, target = null) {
-  const key = chatKeyByInput(type, target);
-  return state.unreadByChatKey[key] || 0;
+  return state.unreadByChatKey[chatKeyByInput(type, target)] || 0;
 }
 
 function markRead(type, target = null) {
   const key = chatKeyByInput(type, target);
-  if (!key) return;
-  if (state.unreadByChatKey[key]) delete state.unreadByChatKey[key];
+  if (key && state.unreadByChatKey[key]) delete state.unreadByChatKey[key];
 }
 
 function incrementUnreadByChatKey(chatKey) {
@@ -181,7 +181,6 @@ function buildChatButton(item, labelText) {
   label.className = "chat-item-label";
   label.textContent = labelText;
   left.appendChild(label);
-
   btn.appendChild(left);
 
   const unread = unreadCount(item.type, item.target);
@@ -197,15 +196,12 @@ function buildChatButton(item, labelText) {
 
 function renderSidebar() {
   els.fixedChats.innerHTML = "";
-  for (const item of fixed) {
-    els.fixedChats.appendChild(buildChatButton(item, item.label));
-  }
+  for (const item of fixed) els.fixedChats.appendChild(buildChatButton(item, item.label));
 
   els.userChats.innerHTML = "";
   for (const user of state.users) {
     if (user.nickname === state.me) continue;
-    const item = dmChat(user.nickname);
-    els.userChats.appendChild(buildChatButton(item, user.nickname));
+    els.userChats.appendChild(buildChatButton(dmChat(user.nickname), user.nickname));
   }
 }
 
@@ -235,21 +231,27 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function showPasteHint(show) {
+  els.pasteHint.classList.toggle("show", Boolean(show));
+}
+
 function clearFileSelection() {
   if (state.filePreviewUrl) {
     URL.revokeObjectURL(state.filePreviewUrl);
     state.filePreviewUrl = null;
   }
+  state.selectedFile = null;
+  state.selectedFileSource = null;
   els.fileInput.value = "";
   els.selectedFileInfo.classList.add("hidden");
   els.selectedFileName.textContent = "";
   els.selectedFileSize.textContent = "";
   els.selectedFilePreview.src = "";
   els.selectedFilePreview.classList.add("hidden");
+  showPasteHint(false);
 }
 
-function updateFileSelectionUI() {
-  const file = els.fileInput.files?.[0];
+function renderSelectedFile(file) {
   if (!file) {
     clearFileSelection();
     return;
@@ -270,6 +272,27 @@ function updateFileSelectionUI() {
   }
 }
 
+function setSelectedFile(file, source = "picker") {
+  state.selectedFile = file || null;
+  state.selectedFileSource = file ? source : null;
+  if (file) {
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      els.fileInput.files = dt.files;
+    } catch {
+      // Some browsers may block programmatic assignment.
+    }
+  }
+  renderSelectedFile(file);
+  showPasteHint(source === "paste");
+}
+
+function updateFileSelectionUI() {
+  const file = els.fileInput.files?.[0] || null;
+  setSelectedFile(file, "picker");
+}
+
 function guessExtensionFromMime(mimeType) {
   const map = {
     "image/png": "png",
@@ -280,25 +303,6 @@ function guessExtensionFromMime(mimeType) {
     "image/bmp": "bmp"
   };
   return map[mimeType] || "png";
-}
-
-function setSelectedFile(file) {
-  try {
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    els.fileInput.files = dt.files;
-    updateFileSelectionUI();
-  } catch {
-    renderMessages([
-      ...state.currentMessages,
-      {
-        sender: "System",
-        createdAt: new Date().toISOString(),
-        content: "Вставка изображения из буфера не поддерживается этим браузером.",
-        format: "plain"
-      }
-    ]);
-  }
 }
 
 function handlePasteImage(e) {
@@ -313,12 +317,11 @@ function handlePasteImage(e) {
   const filename = `screenshot-${Date.now()}.${ext}`;
   const file = new File([blob], filename, { type: blob.type || "image/png", lastModified: Date.now() });
 
-  setSelectedFile(file);
+  setSelectedFile(file, "paste");
   e.preventDefault();
 }
 
 function activeChatIdentity() {
-  if (!state.me) return { chatType: "", chatKey: "" };
   return {
     chatType: state.active.type,
     chatKey: chatKeyByInput(state.active.type, state.active.target)
@@ -332,8 +335,7 @@ function attachmentNode(msg) {
   const wrap = document.createElement("div");
   wrap.className = "attachment";
 
-  const isImage = (attachment.mimeType || "").startsWith("image/");
-  if (isImage) {
+  if ((attachment.mimeType || "").startsWith("image/")) {
     const img = document.createElement("img");
     img.className = "attachment-image";
     img.src = attachment.dataUrl;
@@ -359,20 +361,21 @@ async function deleteMessage(id) {
 function renderMessages(list) {
   state.currentMessages = list;
   els.messages.innerHTML = "";
+
   for (const msg of list) {
     const box = document.createElement("div");
-    const me = msg.sender === state.me;
-    box.className = "msg" + (me ? " me" : "");
+    box.className = "msg" + (msg.sender === state.me ? " me" : "");
 
     const head = document.createElement("div");
     head.className = "head";
 
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${msg.sender} • ${formatTime(msg.createdAt)}`;
+    const modelSuffix = msg.sender === "ChatGPT" && msg.meta?.modelUsed ? ` • ${msg.meta.modelUsed}` : "";
+    meta.textContent = `${msg.sender} • ${formatTime(msg.createdAt)}${modelSuffix}`;
     head.appendChild(meta);
 
-    if (me && Number.isInteger(msg.id)) {
+    if (msg.sender === state.me && Number.isInteger(msg.id)) {
       const del = document.createElement("button");
       del.type = "button";
       del.className = "delete-btn";
@@ -398,26 +401,25 @@ function renderMessages(list) {
     const text = document.createElement("div");
     if (msg.format === "markdown") {
       text.className = "text markdown";
-      const html = marked.parse(msg.content || "", { breaks: true, gfm: true });
-      text.innerHTML = DOMPurify.sanitize(html);
+      text.innerHTML = DOMPurify.sanitize(marked.parse(msg.content || "", { breaks: true, gfm: true }));
     } else {
       text.className = "text";
       text.textContent = msg.content || "";
     }
 
-    const attach = attachmentNode(msg);
     box.appendChild(head);
     box.appendChild(text);
+    const attach = attachmentNode(msg);
     if (attach) box.appendChild(attach);
     els.messages.appendChild(box);
   }
+
   els.messages.scrollTop = els.messages.scrollHeight;
 }
 
 function belongsToActive(msg) {
   const t = state.active.type;
   if (t !== msg.chatType) return false;
-
   if (t === "global") return msg.chatKey === "global";
   if (t === "favorite") return msg.chatKey === `favorite::${state.me}`;
   if (t === "dm") {
@@ -426,6 +428,30 @@ function belongsToActive(msg) {
   }
   if (t === "ai") return msg.chatKey === `ai::${state.me}::${state.active.target}`;
   return false;
+}
+
+async function refreshOpenAIModelInfo() {
+  if (state.active.type !== "ai" || state.active.target !== "openai") {
+    els.modelInfoBar.classList.add("hidden");
+    return;
+  }
+
+  els.modelInfoBar.classList.remove("hidden");
+  els.modelInfoBar.textContent = "Модель ChatGPT (из API): проверка...";
+
+  try {
+    const query = new URLSearchParams();
+    if (state.proxyUrl) query.set("proxyUrl", state.proxyUrl);
+    const data = await api(`/api/ai/openai-model${query.toString() ? `?${query.toString()}` : ""}`);
+
+    if (data.ok) {
+      els.modelInfoBar.textContent = `Модель ChatGPT (из API): ${data.apiModel}`;
+    } else {
+      els.modelInfoBar.textContent = `Модель ChatGPT (из API): ошибка (${data.error || "unknown"})`;
+    }
+  } catch (err) {
+    els.modelInfoBar.textContent = `Модель ChatGPT (из API): ошибка (${err.message})`;
+  }
 }
 
 async function loadHistory() {
@@ -439,7 +465,6 @@ async function loadHistory() {
 
   els.fileWrap.classList.remove("hidden");
   els.aiProxyBar.classList.toggle("hidden", state.active.type !== "ai");
-
   if (state.active.type === "ai") {
     els.fileLabel.textContent = "Изображение";
     els.fileInput.accept = "image/*";
@@ -466,12 +491,12 @@ async function loadHistory() {
       }
     ]);
   }
+
+  refreshOpenAIModelInfo();
 }
 
 function connectWs() {
-  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
 
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}`);
@@ -479,9 +504,11 @@ function connectWs() {
 
   ws.onmessage = (evt) => {
     const msg = JSON.parse(evt.data);
+
     if (msg.event === "users:update") {
       state.users = msg.payload.users || [];
       renderSidebar();
+      return;
     }
 
     if (msg.event === "message:new" && msg.payload?.message) {
@@ -494,9 +521,8 @@ function connectWs() {
         renderSidebar();
       }
 
-      if (isActive) {
-        loadHistory();
-      }
+      if (isActive) loadHistory();
+      return;
     }
 
     if (msg.event === "message:delete" && msg.payload) {
@@ -593,7 +619,7 @@ els.composer.addEventListener("submit", async (e) => {
   if (!state.me) return;
 
   const text = els.messageInput.value.trim();
-  const file = els.fileInput.files?.[0] || null;
+  const file = state.selectedFile || els.fileInput.files?.[0] || null;
 
   try {
     els.submitBtn.disabled = true;
@@ -604,9 +630,7 @@ els.composer.addEventListener("submit", async (e) => {
 
       let imageDataUrl = null;
       if (file) {
-        if (!file.type.startsWith("image/")) {
-          throw new Error("Для AI-чата можно отправлять только изображения");
-        }
+        if (!file.type.startsWith("image/")) throw new Error("Для AI-чата можно отправлять только изображения");
         imageDataUrl = await fileToDataUrl(file);
       }
 

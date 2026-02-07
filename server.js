@@ -219,7 +219,7 @@ function parseAttachment(rawDataUrl, rawName, rawMimeType) {
 
 async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
   if (!OPENAI_API_KEY || OPENAI_API_KEY.includes("PASTE_")) {
-    return "OpenAI API key не настроен на сервере.";
+    return { text: "OpenAI API key не настроен на сервере.", model: null };
   }
 
   const input = [
@@ -253,12 +253,13 @@ async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
 
   if (!response.ok) {
     const body = await response.text();
-    return `Ошибка OpenAI: ${response.status}. ${body.slice(0, 400)}`;
+    return { text: `Ошибка OpenAI: ${response.status}. ${body.slice(0, 400)}`, model: null };
   }
 
   const data = await response.json();
+  const resolvedModel = (data.model || data.response?.model || "").toString() || null;
   if (typeof data.output_text === "string" && data.output_text.trim()) {
-    return data.output_text;
+    return { text: data.output_text, model: resolvedModel };
   }
 
   const texts = [];
@@ -267,7 +268,39 @@ async function callOpenAI({ text, imageDataUrl, proxyUrl, history }) {
       if (part.type === "output_text" && part.text) texts.push(part.text);
     }
   }
-  return texts.join("\n\n") || "Пустой ответ OpenAI.";
+  return { text: texts.join("\n\n") || "Пустой ответ OpenAI.", model: resolvedModel };
+}
+
+async function fetchOpenAIModelInfo(proxyUrl) {
+  if (!OPENAI_API_KEY || OPENAI_API_KEY.includes("PASTE_")) {
+    return { configuredModel: OPENAI_MODEL, apiModel: null, ok: false, error: "OpenAI API key не настроен" };
+  }
+
+  const baseUrl = proxyUrl || "https://api.openai.com";
+  const response = await fetch(`${baseUrl}/v1/models/${encodeURIComponent(OPENAI_MODEL)}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`
+    }
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    return {
+      configuredModel: OPENAI_MODEL,
+      apiModel: null,
+      ok: false,
+      error: `OpenAI models API: ${response.status}. ${body.slice(0, 200)}`
+    };
+  }
+
+  const data = await response.json();
+  return {
+    configuredModel: OPENAI_MODEL,
+    apiModel: (data.id || "").toString() || OPENAI_MODEL,
+    ok: true,
+    error: null
+  };
 }
 
 async function callGemini({ text, imageDataUrl, proxyUrl }) {
@@ -479,10 +512,13 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
     broadcast("message:new", { message: userMessage });
 
     let aiText;
+    let modelUsed = null;
     if (provider === "gemini") {
       aiText = await callGemini({ text, imageDataUrl, proxyUrl });
     } else {
-      aiText = await callOpenAI({ text, imageDataUrl, proxyUrl, history });
+      const openaiResult = await callOpenAI({ text, imageDataUrl, proxyUrl, history });
+      aiText = openaiResult.text;
+      modelUsed = openaiResult.model;
     }
 
     const aiMessage = insertMessage({
@@ -491,13 +527,23 @@ app.post("/api/ai/send", authRequired, async (req, res) => {
       sender: provider === "gemini" ? "Gemini" : "ChatGPT",
       content: aiText,
       format: "markdown",
-      meta: { provider }
+      meta: { provider, modelUsed: modelUsed || OPENAI_MODEL }
     });
 
     broadcast("message:new", { message: aiMessage });
     return res.json({ userMessage, aiMessage });
   } catch (err) {
     return res.status(500).json({ error: err.message || "AI request failed" });
+  }
+});
+
+app.get("/api/ai/openai-model", authRequired, async (req, res) => {
+  try {
+    const proxyUrl = normalizeProxyUrl(req.query.proxyUrl);
+    const info = await fetchOpenAIModelInfo(proxyUrl);
+    return res.json(info);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
   }
 });
 
